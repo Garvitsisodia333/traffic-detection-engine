@@ -1,10 +1,10 @@
 """
 Box C: Explainable Risk Scoring Engine.
-Calculates a 0-100 composite risk score with complete mathematical explainability
-and structured Reason Vectors strictly adhering to the CC6-IC07 Blueprint.
+Calculates a 0-100 composite risk score with complete mathematical explainability,
+structured Reason Vectors, and Native OWASP API Security Top 10 (2023) Mappings.
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from core.models import (
     TelemetryEvent,
     RiskScore,
@@ -13,17 +13,18 @@ from core.models import (
     PIISeverity,
     PIIMatch,
     AbuseAlert,
-    AbuseAlertType
+    AbuseAlertType,
+    OWASPCategory
 )
 
 
 class RiskScorer:
     """
     Computes explainable weighted risk score (0-100):
-    - 35% Exposure (Public unauth vs auth strength)
-    - 25% PII Data Sensitivity (PAN / Aadhaar)
-    - 20% Spec Drift (Shadow / Zombie Status)
-    - 20% Active Anomaly & Attack Frequency
+    - 35% Exposure (Public unauth vs auth strength) -> OWASP API2:2023
+    - 25% PII Data Sensitivity (PAN / Aadhaar) -> OWASP API3:2023
+    - 20% Spec Drift (Shadow / Zombie Status) -> OWASP API9:2023
+    - 20% Active Anomaly & Attack Frequency (BOLA, Scraping, Replay, Workflow)
     """
 
     @classmethod
@@ -34,23 +35,24 @@ class RiskScorer:
                         spec_status: SpecDriftStatus,
                         pii_matches: List[PIIMatch],
                         pii_severity: PIISeverity,
-                        abuse_alerts: List[AbuseAlert]) -> RiskScore:
+                        abuse_alerts: List[AbuseAlert],
+                        session_graph: Optional[Dict[str, Any]] = None) -> RiskScore:
         factors: List[ReasonFactor] = []
         reason_vector_items: List[str] = []
 
         # ---------------------------------------------------------
-        # 1. Exposure (Max 35 points)
+        # 1. Exposure (Max 35 points) - OWASP API2:2023
         # ---------------------------------------------------------
         exposure_pts = 0
         auth_header = event.headers.get("authorization", "") or event.headers.get("Authorization", "")
-        has_bearer_jwt = "bearer" in auth_header.lower() or bool(event.jwt_sub)
 
         if not auth_header and not event.jwt_sub:
             exposure_pts = 35
             factors.append(ReasonFactor(
                 factor="Exposure",
                 points=35,
-                description="+35 Unauthenticated Exposure"
+                description="+35 Unauthenticated Exposure",
+                owasp_category=OWASPCategory.API2_BROKEN_AUTH
             ))
             reason_vector_items.append("+35 Unauth")
         elif "basic" in auth_header.lower():
@@ -58,15 +60,15 @@ class RiskScorer:
             factors.append(ReasonFactor(
                 factor="Exposure",
                 points=20,
-                description="+20 Weak Basic Authentication"
+                description="+20 Weak Basic Authentication",
+                owasp_category=OWASPCategory.API2_BROKEN_AUTH
             ))
             reason_vector_items.append("+20 Weak Auth")
         else:
-            # Valid token/auth
             exposure_pts = 0
 
         # ---------------------------------------------------------
-        # 2. PII Data Sensitivity (Max 25 points)
+        # 2. PII Data Sensitivity (Max 25 points) - OWASP API3:2023
         # ---------------------------------------------------------
         pii_pts = 0
         if pii_severity == PIISeverity.CRITICAL:
@@ -76,7 +78,8 @@ class RiskScorer:
             factors.append(ReasonFactor(
                 factor="PII",
                 points=25,
-                description=f"+25 Critical PII Exposure ({label})"
+                description=f"+25 Critical PII Exposure ({label})",
+                owasp_category=OWASPCategory.API3_PROPERTY_AUTH
             ))
             reason_vector_items.append(f"+25 PII ({label})")
         elif pii_severity == PIISeverity.SENSITIVE:
@@ -86,12 +89,13 @@ class RiskScorer:
             factors.append(ReasonFactor(
                 factor="PII",
                 points=15,
-                description=f"+15 Sensitive PII Exposure ({label})"
+                description=f"+15 Sensitive PII Exposure ({label})",
+                owasp_category=OWASPCategory.API3_PROPERTY_AUTH
             ))
             reason_vector_items.append(f"+15 PII ({label})")
 
         # ---------------------------------------------------------
-        # 3. Spec Drift Status (Max 20 points)
+        # 3. Spec Drift Status (Max 20 points) - OWASP API9:2023
         # ---------------------------------------------------------
         spec_pts = 0
         if spec_status == SpecDriftStatus.SHADOW:
@@ -99,7 +103,8 @@ class RiskScorer:
             factors.append(ReasonFactor(
                 factor="SpecDrift",
                 points=20,
-                description="+20 Undocumented Shadow Route"
+                description="+20 Undocumented Shadow Route",
+                owasp_category=OWASPCategory.API9_IMPROPER_INVENTORY
             ))
             reason_vector_items.append("+20 Shadow")
         elif spec_status == SpecDriftStatus.ZOMBIE:
@@ -107,7 +112,8 @@ class RiskScorer:
             factors.append(ReasonFactor(
                 factor="SpecDrift",
                 points=15,
-                description="+15 Deprecated Zombie v1 Endpoint"
+                description="+15 Deprecated Zombie v1 Endpoint",
+                owasp_category=OWASPCategory.API9_IMPROPER_INVENTORY
             ))
             reason_vector_items.append("+15 Zombie")
 
@@ -116,22 +122,32 @@ class RiskScorer:
         # ---------------------------------------------------------
         anomaly_pts = 0
         if abuse_alerts:
-            # Check for BOLA / Token Replay / Scraping
             alert_types = set(a.alert_type for a in abuse_alerts)
             if AbuseAlertType.BOLA_IDOR in alert_types:
                 anomaly_pts = 20
                 factors.append(ReasonFactor(
                     factor="AbuseAnomaly",
                     points=20,
-                    description="+20 BOLA / IDOR Violation"
+                    description="+20 BOLA / IDOR Violation",
+                    owasp_category=OWASPCategory.API1_BOLA
                 ))
                 reason_vector_items.append("+20 BOLA")
+            elif AbuseAlertType.WORKFLOW_VIOLATION in alert_types:
+                anomaly_pts = 20
+                factors.append(ReasonFactor(
+                    factor="AbuseAnomaly",
+                    points=20,
+                    description="+20 Workflow Sequence / Graph Violation",
+                    owasp_category=OWASPCategory.API6_BUSINESS_FLOW
+                ))
+                reason_vector_items.append("+20 Workflow Violation")
             elif AbuseAlertType.TOKEN_REPLAY in alert_types:
                 anomaly_pts = 20
                 factors.append(ReasonFactor(
                     factor="AbuseAnomaly",
                     points=20,
-                    description="+20 Token Replay Misuse"
+                    description="+20 Token Replay Misuse",
+                    owasp_category=OWASPCategory.API2_BROKEN_AUTH
                 ))
                 reason_vector_items.append("+20 Replay")
             elif AbuseAlertType.DATA_SCRAPING in alert_types or AbuseAlertType.BYTE_SPIKE in alert_types:
@@ -139,7 +155,8 @@ class RiskScorer:
                 factors.append(ReasonFactor(
                     factor="AbuseAnomaly",
                     points=15,
-                    description="+15 High-Velocity Scraping / Byte Spike"
+                    description="+15 High-Velocity Scraping / Byte Spike",
+                    owasp_category=OWASPCategory.API4_UNRESTRICTED_RESOURCE
                 ))
                 reason_vector_items.append("+15 Scraping")
 
@@ -158,6 +175,18 @@ class RiskScorer:
             severity = "MEDIUM"
         else:
             severity = "LOW"
+
+        # Determine Primary OWASP Category
+        primary_owasp = None
+        for alert in abuse_alerts:
+            if alert.owasp_category:
+                primary_owasp = alert.owasp_category
+                break
+        if not primary_owasp:
+            for factor in factors:
+                if factor.owasp_category:
+                    primary_owasp = factor.owasp_category
+                    break
 
         # Evaluation against simulation ground truth if provided
         evaluation_label = None
@@ -182,6 +211,7 @@ class RiskScorer:
             request_id=event.request_id,
             risk_score=final_score,
             severity=severity,
+            primary_owasp_category=primary_owasp,
             reason_vector=reason_vector_items,
             factors=factors,
             parameterized_path=parameterized_path,
@@ -189,6 +219,7 @@ class RiskScorer:
             spec_status=spec_status,
             pii_matches=pii_matches,
             abuse_alerts=abuse_alerts,
+            session_graph=session_graph,
             timestamp=event.timestamp,
             evaluation_label=evaluation_label
         )

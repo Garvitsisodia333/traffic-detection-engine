@@ -8,7 +8,7 @@ Identifies high-velocity crawlers and automated scrapers by evaluating:
 import time
 from collections import deque
 from typing import Dict, Deque, Optional, Tuple
-from core.models import AbuseAlert, AbuseAlertType
+from core.models import AbuseAlert, AbuseAlertType, OWASPCategory
 from core.abuse.baseline import BaselineProfiler
 
 
@@ -76,6 +76,7 @@ class ScrapingDetector:
             
             return AbuseAlert(
                 alert_type=alert_type,
+                owasp_category=OWASPCategory.API4_UNRESTRICTED_RESOURCE,
                 severity="CRITICAL" if (rate_violation and byte_violation) else "HIGH",
                 confidence=round(min(1.0, 0.75 + (max(z_rate, z_bytes) / 10.0) * 0.25), 2),
                 reason=" | ".join(reasons),

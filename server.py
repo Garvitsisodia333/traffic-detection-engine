@@ -107,6 +107,12 @@ def get_inventory():
     return engine.get_inventory()
 
 
+@app.get("/api/session-graph/{session_id}")
+def get_session_graph(session_id: str):
+    """Returns Directed Behavioral Graph (nodes & edges) for SOC visualization."""
+    return engine.get_session_graph(session_id)
+
+
 @app.get("/api/alerts")
 def get_alerts(min_score: int = 60, limit: int = 50):
     """Returns recent alerts for SOC Command Center Alert Queue."""

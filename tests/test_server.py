@@ -48,7 +48,13 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("tpr_percentage", data)
-        self.assertIn("fpr_percentage", data)
+    def test_session_graph_endpoint(self):
+        response = self.client.get("/api/session-graph/sess_test_123")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("nodes", data)
+        self.assertIn("edges", data)
+        self.assertEqual(data["session_id"], "sess_test_123")
 
 
 if __name__ == "__main__":

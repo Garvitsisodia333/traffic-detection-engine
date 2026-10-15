@@ -7,7 +7,7 @@ Identifies unauthorized resource enumeration (OWASP API Security #1).
 import time
 from collections import deque
 from typing import Dict, Deque, Tuple, Optional, List
-from core.models import AbuseAlert, AbuseAlertType
+from core.models import AbuseAlert, AbuseAlertType, OWASPCategory
 
 
 class BOLADetector:
@@ -83,6 +83,7 @@ class BOLADetector:
             confidence = 0.99 if is_sequential else min(1.0, 0.7 + (unique_count / 10.0) * 0.3)
             return AbuseAlert(
                 alert_type=AbuseAlertType.BOLA_IDOR,
+                owasp_category=OWASPCategory.API1_BOLA,
                 severity="CRITICAL" if unique_count >= 8 or is_sequential else "HIGH",
                 confidence=round(confidence, 2),
                 reason=f"User '{jwt_sub}' accessed {unique_count} distinct object IDs in 60s sliding window "

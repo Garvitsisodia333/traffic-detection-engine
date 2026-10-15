@@ -1,7 +1,7 @@
 """
 Core Discovery, Abuse Detection & Risk Engine Pipeline.
 Orchestrates Box A (Discovery), Box B (Runtime Abuse), Box C (Explainable Scoring),
-and State/Persistence with < 0.5ms non-blocking latency overhead.
+Context-Aware Session Graphing, and State/Persistence with < 0.5ms latency overhead.
 """
 
 import time
@@ -22,6 +22,7 @@ from core.abuse.baseline import BaselineProfiler
 from core.abuse.bola_detector import BOLADetector
 from core.abuse.scraping_detector import ScrapingDetector
 from core.abuse.replay_detector import TokenReplayDetector
+from core.graph.session_graph import SessionGraphEngine
 from core.scoring.risk_scorer import RiskScorer
 from storage.state_store import StateStore
 from storage.telemetry_db import TelemetryDB
@@ -29,7 +30,7 @@ from storage.telemetry_db import TelemetryDB
 
 class CoreDetectionEngine:
     """
-    Main engine unifying Box A, Box B, Box C and Telemetry Persistence.
+    Main engine unifying Box A, Box B, Box C, Session Graphing and Telemetry Persistence.
     """
 
     def __init__(self, openapi_spec_path: Optional[str] = None, db_path: str = "telemetry.db"):
@@ -50,6 +51,9 @@ class CoreDetectionEngine:
         self.bola_detector = BOLADetector(window_seconds=60.0, unique_id_threshold=5)
         self.scraping_detector = ScrapingDetector(self.baseline_profiler, window_seconds=60.0)
         self.replay_detector = TokenReplayDetector(window_seconds=60.0)
+
+        # Context-Aware Session Graphing Engine
+        self.session_graph_engine = SessionGraphEngine(session_ttl=300.0)
 
         # Box C: Explainable Risk Scorer
         self.risk_scorer = RiskScorer()
@@ -79,13 +83,14 @@ class CoreDetectionEngine:
         spec_status, matched_template, _ = self.spec_comparator.compare(event.method, event.path)
 
         # -------------------------------------------------------------
-        # Box B: Runtime Abuse Detection
+        # Box B: Runtime Abuse Detection & Session Graphing
         # -------------------------------------------------------------
         abuse_alerts: List[AbuseAlert] = []
         route_key = f"{event.method.upper()}:{parameterized_path}"
         client_key = event.jwt_sub or event.client_ip or "anonymous"
+        session_key = event.session_id or event.jwt_sub or event.client_ip or "anonymous_session"
 
-        # 1. BOLA / IDOR Sequence Check
+        # 1. BOLA / IDOR Sequence Check (OWASP API1:2023)
         bola_alert = self.bola_detector.inspect(
             jwt_sub=event.jwt_sub,
             extracted_params=extracted_params,
@@ -95,7 +100,7 @@ class CoreDetectionEngine:
         if bola_alert:
             abuse_alerts.append(bola_alert)
 
-        # 2. Data Scraping & Harvesting Check
+        # 2. Data Scraping & Harvesting Check (OWASP API4:2023)
         scraping_alert = self.scraping_detector.inspect(
             client_id=client_key,
             route_key=route_key,
@@ -105,7 +110,7 @@ class CoreDetectionEngine:
         if scraping_alert:
             abuse_alerts.append(scraping_alert)
 
-        # 3. Token Misuse & Replay Check
+        # 3. Token Misuse & Replay Check (OWASP API2:2023)
         replay_alert = self.replay_detector.inspect(
             jwt_jti=event.jwt_jti,
             jwt_sub=event.jwt_sub,
@@ -115,6 +120,15 @@ class CoreDetectionEngine:
         )
         if replay_alert:
             abuse_alerts.append(replay_alert)
+
+        # 4. Context-Aware Session Graph Analysis (OWASP API6:2023)
+        workflow_alert, session_graph_data = self.session_graph_engine.record_transition(
+            session_id=session_key,
+            route_key=route_key,
+            timestamp=event.timestamp
+        )
+        if workflow_alert:
+            abuse_alerts.append(workflow_alert)
 
         # -------------------------------------------------------------
         # Box C: Explainable Risk Scorer (0-100)
@@ -126,7 +140,8 @@ class CoreDetectionEngine:
             spec_status=spec_status,
             pii_matches=pii_matches,
             pii_severity=pii_severity,
-            abuse_alerts=abuse_alerts
+            abuse_alerts=abuse_alerts,
+            session_graph=session_graph_data
         )
 
         # -------------------------------------------------------------
@@ -145,3 +160,6 @@ class CoreDetectionEngine:
 
     def get_confusion_matrix(self) -> Dict[str, Any]:
         return self.telemetry_db.get_confusion_matrix()
+
+    def get_session_graph(self, session_id: str) -> Dict[str, Any]:
+        return self.session_graph_engine.export_session_graph(session_id)

@@ -7,7 +7,7 @@ within a 60-second sliding window (Token Replay / Session Hijacking).
 import time
 from collections import deque
 from typing import Dict, Deque, Tuple, Optional, Set
-from core.models import AbuseAlert, AbuseAlertType
+from core.models import AbuseAlert, AbuseAlertType, OWASPCategory
 
 
 class TokenReplayDetector:
@@ -73,6 +73,7 @@ class TokenReplayDetector:
 
             return AbuseAlert(
                 alert_type=AbuseAlertType.TOKEN_REPLAY,
+                owasp_category=OWASPCategory.API2_BROKEN_AUTH,
                 severity="CRITICAL",
                 confidence=0.98,
                 reason=f"Token JTI '{jwt_jti}' reused concurrently across divergent client fingerprints: " + ", ".join(violations),
